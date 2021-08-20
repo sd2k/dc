@@ -52,7 +52,7 @@ enum SearchDepth {
 }
 
 impl SearchDepth {
-    fn is_exceeded(&self, depth: usize) -> bool {
+    const fn is_exceeded(&self, depth: usize) -> bool {
         matches!(self, SearchDepth::Limited(x) if depth >= *x)
     }
 }
