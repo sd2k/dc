@@ -28,8 +28,7 @@ fn get_compose_file(path: &Path) -> Result<Option<Cow<'static, str>>> {
                 }
                 for x in RECURSE_INTO_DIRS {
                     if x == name {
-                        if let Ok(Some(file)) =
-                            find_compose_file(entry.path(), SearchDepth::Limited(1))
+                        if let Some(file) = find_compose_file(entry.path(), SearchDepth::Limited(1))
                         {
                             return Ok(Some(Cow::Owned(
                                 file.into_os_string().into_string().unwrap(),
@@ -61,21 +60,21 @@ impl SearchDepth {
 /// Searches for a docker-compose file, starting in the supplied directory
 /// and working upwards up to `max_depth` levels.
 #[instrument]
-fn find_compose_file(mut path: PathBuf, max_depth: SearchDepth) -> Result<Option<PathBuf>> {
+fn find_compose_file(mut path: PathBuf, max_depth: SearchDepth) -> Option<PathBuf> {
     let mut depth = 0;
     loop {
         debug!("Searching in {}", path.to_str().unwrap());
         if let Ok(Some(filename)) = get_compose_file(&path) {
             path.push(filename.as_ref());
-            return Ok(Some(path));
+            return Some(path);
         }
 
         depth += 1;
         if max_depth.is_exceeded(depth) {
-            return Ok(None);
+            return None;
         }
         match path.parent() {
-            None => return Ok(None),
+            None => return None,
             Some(x) => path = x.to_path_buf(),
         }
     }
@@ -85,7 +84,7 @@ fn find_compose_file(mut path: PathBuf, max_depth: SearchDepth) -> Result<Option
 #[instrument]
 fn run_command(args: ArgsOs) -> Result<Child> {
     let compose_file =
-        find_compose_file(current_dir()?, SearchDepth::Unlimited)?.ok_or_else(|| {
+        find_compose_file(current_dir()?, SearchDepth::Unlimited).ok_or_else(|| {
             eyre!(
         "Couldn't find a docker-compose.yml or docker-compose.yaml file in any parent directory!"
     )
