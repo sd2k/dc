@@ -19,23 +19,21 @@ const VALID_FILENAMES: [&str; 2] = ["docker-compose.yml", "docker-compose.yaml"]
 #[instrument]
 fn get_compose_file(path: &Path) -> Result<Option<Cow<'static, str>>> {
     if path.is_dir() {
-        for entry in read_dir(path)? {
-            if let Ok(entry) = entry {
-                if let Some(name) = entry.file_name().to_str() {
-                    for x in VALID_FILENAMES.iter() {
-                        if x == &name {
-                            return Ok(Some(Cow::Borrowed(x)));
-                        }
+        for entry in read_dir(path)?.flatten() {
+            if let Some(name) = entry.file_name().to_str() {
+                for x in VALID_FILENAMES {
+                    if x == name {
+                        return Ok(Some(Cow::Borrowed(x)));
                     }
-                    for x in RECURSE_INTO_DIRS.iter() {
-                        if x == &name {
-                            if let Ok(Some(file)) =
-                                find_compose_file(entry.path(), SearchDepth::Limited(1))
-                            {
-                                return Ok(Some(Cow::Owned(
-                                    file.into_os_string().into_string().unwrap(),
-                                )));
-                            }
+                }
+                for x in RECURSE_INTO_DIRS {
+                    if x == name {
+                        if let Ok(Some(file)) =
+                            find_compose_file(entry.path(), SearchDepth::Limited(1))
+                        {
+                            return Ok(Some(Cow::Owned(
+                                file.into_os_string().into_string().unwrap(),
+                            )));
                         }
                     }
                 }
@@ -54,27 +52,31 @@ enum SearchDepth {
     Limited(usize),
 }
 
+impl SearchDepth {
+    fn is_exceeded(&self, depth: usize) -> bool {
+        matches!(self, SearchDepth::Limited(x) if depth >= *x)
+    }
+}
+
 /// Searches for a docker-compose file, starting in the supplied directory
 /// and working upwards up to `max_depth` levels.
 #[instrument]
-fn find_compose_file(path: PathBuf, max_depth: SearchDepth) -> Result<Option<PathBuf>> {
-    let mut current = path.clone();
+fn find_compose_file(mut path: PathBuf, max_depth: SearchDepth) -> Result<Option<PathBuf>> {
     let mut depth = 0;
     loop {
-        debug!("Searching in {}", current.to_str().unwrap());
-        if let Ok(Some(filename)) = get_compose_file(&current) {
-            current.push(filename.as_ref());
-            return Ok(Some(current));
+        debug!("Searching in {}", path.to_str().unwrap());
+        if let Ok(Some(filename)) = get_compose_file(&path) {
+            path.push(filename.as_ref());
+            return Ok(Some(path));
         }
 
         depth += 1;
-        match max_depth {
-            SearchDepth::Limited(x) if depth >= x => return Ok(None),
-            _ => {}
+        if max_depth.is_exceeded(depth) {
+            return Ok(None);
         }
-        match current.parent() {
+        match path.parent() {
             None => return Ok(None),
-            Some(x) => current = x.to_path_buf(),
+            Some(x) => path = x.to_path_buf(),
         }
     }
 }
@@ -82,12 +84,13 @@ fn find_compose_file(path: PathBuf, max_depth: SearchDepth) -> Result<Option<Pat
 /// Runs the supplied docker-compose command with the '-f' flag included.
 #[instrument]
 fn run_command(args: ArgsOs) -> Result<Child> {
-    let compose_file = find_compose_file(current_dir()?, SearchDepth::Unlimited)?.ok_or(
-        eyre!(
+    let compose_file =
+        find_compose_file(current_dir()?, SearchDepth::Unlimited)?.ok_or_else(|| {
+            eyre!(
         "Couldn't find a docker-compose.yml or docker-compose.yaml file in any parent directory!"
     )
-        .suggestion("Make sure you're in a project with a docker-compose file."),
-    )?;
+            .suggestion("Make sure you're in a project with a docker-compose file.")
+        })?;
     Ok(Command::new("docker-compose")
         .arg("-f")
         .arg(compose_file)
